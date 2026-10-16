@@ -593,6 +593,10 @@ app.delete('/api/qr-requests/:id', async (req, res) => {
   }
 });
 
+app.get("/", (req, res) => {
+  res.send("API is running");
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 Server đang chạy tại cổng http://localhost:${PORT}`);
   console.log(`📡 API Endpoints sẵn sàng tại http://localhost:${PORT}/api/products`);
