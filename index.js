@@ -79,69 +79,73 @@ export function slugify(text) {
     .replace(/-+/g, '-');
 }
 
+let mongoConnectingPromise = null;
+
 // MongoDB Connection Logic
 async function connectToMongo() {
-  if (!mongoUri) {
-    dbConnectionError = 'Chưa điền MONGODB_URI trong file .env';
-    console.log('\n======================================================');
-    console.log('⚠️  CHƯA CẤU HÌNH MONGODB_URI');
-    console.log('👉 Vui lòng mở file .env ở thư mục gốc và dán link kết nối MongoDB:');
-    console.log('   MONGODB_URI=mongodb+srv://user:pass@cluster0.xxx.mongodb.net/vhh_db');
-    console.log('💡 Hệ thống đang chạy ở chế độ In-Memory Fallback với dữ liệu mẫu.');
-    console.log('======================================================\n');
+  if (isDbConnected && mongoose.connection.readyState === 1) {
     return;
   }
 
-  if (mongoUri.includes('<password>') || mongoUri.includes('<db_password>')) {
-    console.warn('\n⚠️  CẢNH BÁO: Link MONGODB_URI vẫn còn chứa placeholder <password>. Vui lòng thay bằng mật khẩu thật!\n');
+  const currentUri = (process.env.MONGODB_URI || process.env.MONGO_URI || mongoUri || '').trim().replace(/^['"]|['"]$/g, '');
+
+  if (!currentUri) {
+    dbConnectionError = 'Chưa điền MONGODB_URI trong file .env hoặc Vercel Environment Variables';
+    return;
   }
 
-  try {
-    console.log('🔄 Đang kết nối tới MongoDB...');
-    await mongoose.connect(mongoUri, {
-      serverSelectionTimeoutMS: 8000,
-      connectTimeoutMS: 10000,
-    });
+  if (mongoConnectingPromise) {
+    return mongoConnectingPromise;
+  }
 
-    isDbConnected = true;
-    dbConnectionError = null;
-    console.log('✅ ĐÃ KẾT NỐI MONGODB THÀNH CÔNG!');
-
-    // Check & Auto Seed
-    const count = await Product.countDocuments();
-    if (count === 0) {
-      console.log('🌱 Database đang trống, tiến hành nạp dữ liệu mẫu ban đầu...');
-      await Product.insertMany(defaultSeedProducts);
-      console.log(`✅ Đã nạp thành công ${defaultSeedProducts.length} sản phẩm mẫu vào MongoDB!`);
-    } else {
-      console.log(`📦 Tìm thấy ${count} sản phẩm đã có sẵn trong MongoDB.`);
-      // Đảm bảo Kẹo dừa dẻo Ngọc Hải có trong DB
-      const ngocHaiExists = await Product.findOne({ name: /Kẹo dừa dẻo Ngọc Hải/i });
-      if (!ngocHaiExists) {
-        console.log('🥥 Tự động nạp thêm Kẹo dừa dẻo Ngọc Hải vào MongoDB...');
-        await Product.create(defaultSeedProducts[0]);
-      }
-      // Tự động bổ sung slug cho những sản phẩm chưa có slug
-      const prodsWithoutSlug = await Product.find({
-        $or: [{ slug: { $exists: false } }, { slug: '' }, { slug: null }]
+  mongoConnectingPromise = (async () => {
+    try {
+      console.log('🔄 Đang kết nối tới MongoDB...');
+      await mongoose.connect(currentUri, {
+        serverSelectionTimeoutMS: 8000,
+        connectTimeoutMS: 10000,
       });
-      for (const p of prodsWithoutSlug) {
-        p.slug = slugify(p.name);
-        await p.save();
+
+      isDbConnected = true;
+      dbConnectionError = null;
+      console.log('✅ ĐÃ KẾT NỐI MONGODB THÀNH CÔNG!');
+
+      // Check & Auto Seed
+      const count = await Product.countDocuments();
+      if (count === 0) {
+        console.log('🌱 Database đang trống, tiến hành nạp dữ liệu mẫu ban đầu...');
+        await Product.insertMany(defaultSeedProducts);
+        console.log(`✅ Đã nạp thành công ${defaultSeedProducts.length} sản phẩm mẫu vào MongoDB!`);
+      } else {
+        const ngocHaiExists = await Product.findOne({ name: /Kẹo dừa dẻo Ngọc Hải/i });
+        if (!ngocHaiExists) {
+          console.log('🥥 Tự động nạp thêm Kẹo dừa dẻo Ngọc Hải vào MongoDB...');
+          await Product.create(defaultSeedProducts[0]);
+        }
+        const prodsWithoutSlug = await Product.find({
+          $or: [{ slug: { $exists: false } }, { slug: '' }, { slug: null }]
+        });
+        for (const p of prodsWithoutSlug) {
+          p.slug = slugify(p.name);
+          await p.save();
+        }
       }
+    } catch (err) {
+      isDbConnected = false;
+      dbConnectionError = err.message;
+      console.error('\n❌ LỖI KẾT NỐI MONGODB:', err.message);
+      if (err.message.includes('whitelist') || err.message.includes('MongooseServerSelectionError')) {
+        console.error('👉 GỢI Ý: Hãy kiểm tra IP Whitelist trên MongoDB Atlas (vào Network Access -> thêm 0.0.0.0/0).');
+      }
+    } finally {
+      mongoConnectingPromise = null;
     }
-  } catch (err) {
-    isDbConnected = false;
-    dbConnectionError = err.message;
-    console.error('\n❌ LỖI KẾT NỐI MONGODB:', err.message);
-    if (err.message.includes('whitelist') || err.message.includes('MongooseServerSelectionError')) {
-      console.error('👉 GỢI Ý: Hãy kiểm tra IP Whitelist trên MongoDB Atlas (vào Network Access -> thêm 0.0.0.0/0).');
-    }
-    console.log('💡 Hệ thống tự động chuyển sang chế độ In-Memory để không làm gián đoạn ứng dụng.\n');
-  }
+  })();
+
+  return mongoConnectingPromise;
 }
 
-connectToMongo();
+connectToMongo().catch(() => {});
 
 // Monitor connection changes
 mongoose.connection.on('disconnected', () => {
@@ -597,8 +601,14 @@ app.get("/", (req, res) => {
   res.send("API is running");
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server đang chạy tại cổng http://localhost:${PORT}`);
-  console.log(`📡 API Endpoints sẵn sàng tại http://localhost:${PORT}/api/products`);
-});
+// Chỉ lắng nghe port khi chạy local hoặc máy chủ độc lập (không chạy trên Vercel Serverless)
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`🚀 Server đang chạy tại cổng http://localhost:${PORT}`);
+    console.log(`📡 API Endpoints sẵn sàng tại http://localhost:${PORT}/api/products`);
+  });
+}
+
+export default app;
+
 
