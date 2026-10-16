@@ -79,6 +79,45 @@ export function slugify(text) {
     .replace(/-+/g, '-');
 }
 
+// Trích xuất public_id từ URL Cloudinary
+export function getPublicIdFromUrl(url) {
+  if (!url || typeof url !== 'string' || !url.includes('cloudinary.com')) {
+    return null;
+  }
+  try {
+    const parts = url.split(/\/upload\/(?:v\d+\/)?/);
+    if (parts.length < 2) return null;
+    let pathAfterUpload = parts[parts.length - 1];
+    const lastDotIndex = pathAfterUpload.lastIndexOf('.');
+    if (lastDotIndex !== -1) {
+      pathAfterUpload = pathAfterUpload.substring(0, lastDotIndex);
+    }
+    return decodeURIComponent(pathAfterUpload);
+  } catch (err) {
+    return null;
+  }
+}
+
+// Xoá danh sách ảnh Cloudinary theo URLs hoặc public_ids
+export async function deleteCloudinaryImages(urlsOrIds) {
+  if (!isCloudinaryConfigured || !Array.isArray(urlsOrIds) || urlsOrIds.length === 0) {
+    return;
+  }
+  const publicIds = urlsOrIds
+    .map(item => (typeof item === 'string' && item.startsWith('http') ? getPublicIdFromUrl(item) : item))
+    .filter(Boolean);
+
+  const uniqueIds = [...new Set(publicIds)];
+  for (const pid of uniqueIds) {
+    try {
+      console.log(`🗑️ Đang xoá ảnh khỏi Cloudinary: ${pid}`);
+      await cloudinary.uploader.destroy(pid);
+    } catch (err) {
+      console.warn(`⚠️ Lỗi xoá ảnh ${pid} trên Cloudinary:`, err.message);
+    }
+  }
+}
+
 let mongoConnectingPromise = null;
 
 // MongoDB Connection Logic
@@ -87,7 +126,10 @@ async function connectToMongo() {
     return;
   }
 
-  const currentUri = (process.env.MONGODB_URI || process.env.MONGO_URI || mongoUri || '').trim().replace(/^['"]|['"]$/g, '');
+  let currentUri = (process.env.MONGODB_URI || process.env.MONGO_URI || mongoUri || '').trim().replace(/^['"]|['"]$/g, '');
+  if (currentUri.startsWith('MONGODB_URI=')) {
+    currentUri = currentUri.substring('MONGODB_URI='.length).trim().replace(/^['"]|['"]$/g, '');
+  }
 
   if (!currentUri) {
     dbConnectionError = 'Chưa điền MONGODB_URI trong file .env hoặc Vercel Environment Variables';
@@ -297,6 +339,47 @@ app.post('/api/upload-multiple', async (req, res) => {
   }
 });
 
+// 3c. Delete Image(s) from Cloudinary
+const handleDeleteImages = async (req, res) => {
+  try {
+    const { url, urls, public_id, public_ids } = req.body || {};
+
+    if (!isCloudinaryConfigured) {
+      return res.json({
+        success: true,
+        message: 'Cloudinary chưa cấu hình, không thể xoá trên đám mây.'
+      });
+    }
+
+    const itemsToDelete = [];
+    if (url) itemsToDelete.push(url);
+    if (public_id) itemsToDelete.push(public_id);
+    if (Array.isArray(urls)) itemsToDelete.push(...urls);
+    if (Array.isArray(public_ids)) itemsToDelete.push(...public_ids);
+
+    if (itemsToDelete.length === 0) {
+      return res.status(400).json({ success: false, message: 'Chưa cung cấp URL hoặc public_id ảnh cần xoá' });
+    }
+
+    await deleteCloudinaryImages(itemsToDelete);
+
+    return res.json({
+      success: true,
+      message: `Đã xử lý xoá ${itemsToDelete.length} ảnh khỏi Cloudinary thành công!`
+    });
+  } catch (err) {
+    console.error('Lỗi xoá ảnh Cloudinary:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Lỗi khi xoá ảnh khỏi Cloudinary: ' + err.message,
+      error: err.message
+    });
+  }
+};
+
+app.post('/api/upload/delete', handleDeleteImages);
+app.delete('/api/upload', handleDeleteImages);
+
 // 4. GET all products
 app.get('/api/products', async (req, res) => {
   try {
@@ -475,25 +558,39 @@ app.put('/api/products/:id', async (req, res) => {
 app.delete('/api/products/:id', async (req, res) => {
   const { id } = req.params;
   try {
+    let deletedProduct = null;
     if (isDbConnected) {
-      let deleted = null;
       if (mongoose.isValidObjectId(id)) {
-        deleted = await Product.findByIdAndDelete(id);
+        deletedProduct = await Product.findByIdAndDelete(id);
       } else {
-        deleted = await Product.findOneAndDelete({ verificationCode: id });
+        deletedProduct = await Product.findOneAndDelete({ verificationCode: id });
       }
-      if (!deleted) {
+      if (!deletedProduct) {
         return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm để xoá' });
       }
-      return res.json({ success: true, message: 'Đã xoá sản phẩm thành công!' });
     } else {
       const index = inMemoryProducts.findIndex(p => p._id === id || p.verificationCode === id);
       if (index === -1) {
         return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm để xoá' });
       }
-      inMemoryProducts.splice(index, 1);
-      return res.json({ success: true, message: 'Đã xoá sản phẩm thành công (In-Memory)!' });
+      deletedProduct = inMemoryProducts.splice(index, 1)[0];
     }
+
+    // Tự động xoá ảnh sản phẩm trên Cloudinary
+    if (deletedProduct) {
+      const imagesToPurge = [
+        deletedProduct.image,
+        ...(Array.isArray(deletedProduct.gallery) ? deletedProduct.gallery : [])
+      ].filter(u => u && typeof u === 'string' && u.includes('cloudinary.com'));
+
+      if (imagesToPurge.length > 0) {
+        deleteCloudinaryImages(imagesToPurge).catch(err => {
+          console.warn('Lỗi dọn dẹp ảnh Cloudinary của sản phẩm đã xoá:', err.message);
+        });
+      }
+    }
+
+    return res.json({ success: true, message: 'Đã xoá sản phẩm và dọn dẹp ảnh Cloudinary thành công!' });
   } catch (err) {
     console.error('Lỗi xoá sản phẩm:', err);
     res.status(500).json({ success: false, message: 'Không thể xoá sản phẩm', error: err.message });
