@@ -23,7 +23,7 @@ const productSchema = new mongoose.Schema({
   },
   system: {
     type: String,
-    default: 'CỔNG TRUY XUẤT NGUỒN GỐC DNTRACE (dntrace.com)'
+    default: 'CỔNG truy xuất thông tin DNTRACE (dntrace.com)'
   },
   provider: {
     type: String,

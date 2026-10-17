@@ -110,10 +110,17 @@ export async function deleteCloudinaryImages(urlsOrIds) {
   const uniqueIds = [...new Set(publicIds)];
   for (const pid of uniqueIds) {
     try {
-      console.log(`🗑️ Đang xoá ảnh khỏi Cloudinary: ${pid}`);
-      await cloudinary.uploader.destroy(pid);
+      console.log(`🗑️ Đang xoá file khỏi Cloudinary: ${pid}`);
+      const res = await cloudinary.uploader.destroy(pid);
+      if (res && res.result === 'not found') {
+        await cloudinary.uploader.destroy(pid, { resource_type: 'raw' });
+      }
     } catch (err) {
-      console.warn(`⚠️ Lỗi xoá ảnh ${pid} trên Cloudinary:`, err.message);
+      try {
+        await cloudinary.uploader.destroy(pid, { resource_type: 'raw' });
+      } catch (err2) {
+        console.warn(`⚠️ Lỗi xoá file ${pid} trên Cloudinary:`, err.message);
+      }
     }
   }
 }
@@ -248,7 +255,6 @@ app.post('/api/auth/login', (req, res) => {
   }
   return res.status(401).json({
     success: false,
-    message: 'Tên đăng nhập hoặc mật khẩu không chính xác! (Mặc định: admin / admin)'
   });
 });
 

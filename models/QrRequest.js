@@ -33,7 +33,7 @@ const qrRequestSchema = new mongoose.Schema({
   },
   qrType: {
     type: String,
-    default: 'Tem Truy Xuất Nguồn Gốc (QR Code)',
+    default: 'Tem truy xuất thông tin (QR Code)',
   },
   quantity: {
     type: String,
