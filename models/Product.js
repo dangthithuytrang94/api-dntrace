@@ -77,9 +77,17 @@ const productSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  storyImages: {
+    type: [String],
+    default: []
+  },
   rawMaterials: {
     type: String,
     default: ''
+  },
+  rawMaterialsImages: {
+    type: [String],
+    default: []
   },
   standards: [standardSchema],
   netWeight: {
