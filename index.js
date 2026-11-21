@@ -260,7 +260,7 @@ app.get('/api/status', async (req, res) => {
 // 2. Authentication: Login (username: admin, password: admin)
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
-  if (username === 'admin' && password === 'admin') {
+  if (username === process.env.TKS && password === process.env.PWS) {
     return res.json({
       success: true,
       token: 'vhh_admin_jwt_' + Date.now(),
